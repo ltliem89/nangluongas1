@@ -1,0 +1,6 @@
+{
+  "name": "Mô phỏng 3D Bài 15: Năng lượng ánh sáng (KHTN 7)",
+  "description": "Mô phỏng 3D tương tác thí nghiệm thu năng lượng từ ánh sáng (Hình 15.1 SGK KHTN 7 Kết nối tri thức) với mô hình vật lí pin quang điện và điện kế độc lập.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
