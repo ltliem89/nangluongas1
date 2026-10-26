@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { HelpCircle, Moon, Move, RotateCw, ShieldAlert, Sun } from 'lucide-react';
 import {
   CameraPreset,
   ExperimentState,
@@ -29,6 +28,8 @@ import {
   createPhotovoltaicCellTexture,
   createRadialContactShadowTexture,
 } from './proceduralAssets';
+import { ControllableObjectKey, GamePhase } from '../game/missions';
+import { gameAudio } from '../audio/gameAudio';
 
 interface LabViewport3DProps {
   state: ExperimentState;
@@ -36,6 +37,10 @@ interface LabViewport3DProps {
   onUpdateState: (patch: Partial<ExperimentState>) => void;
   onFpsReport?: (fps: number, isSoftwareGl: boolean) => void;
   onOpenTutorial?: () => void;
+  selectedObject?: ControllableObjectKey;
+  onSelectObject?: (key: ControllableObjectKey) => void;
+  gamePhase?: GamePhase;
+  celebrationTrigger?: number;
 }
 
 interface ProjectedLabel {
@@ -131,18 +136,29 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
   physics,
   onUpdateState,
   onFpsReport,
-  onOpenTutorial,
+  selectedObject = 'lamp',
+  onSelectObject,
+  gamePhase = 'playing',
+  celebrationTrigger = 0,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const stateRef = useRef<ExperimentState>(state);
   const physicsRef = useRef<PhysicsEvaluation>(physics);
   const onUpdateStateRef = useRef(onUpdateState);
   const onFpsReportRef = useRef(onFpsReport);
+  const selectedObjectRef = useRef<ControllableObjectKey>(selectedObject);
+  const onSelectObjectRef = useRef(onSelectObject);
+  const gamePhaseRef = useRef<GamePhase>(gamePhase);
+  const celebrationTriggerRef = useRef<number>(celebrationTrigger);
 
   stateRef.current = state;
   physicsRef.current = physics;
   onUpdateStateRef.current = onUpdateState;
   onFpsReportRef.current = onFpsReport;
+  selectedObjectRef.current = selectedObject;
+  onSelectObjectRef.current = onSelectObject;
+  gamePhaseRef.current = gamePhase;
+  celebrationTriggerRef.current = celebrationTrigger;
 
   const [labels, setLabels] = useState<ProjectedLabel[]>([]);
   const [hoveredInteractive, setHoveredInteractive] = useState<string | null>(null);
@@ -158,6 +174,12 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
       cameraAnimatingRef.current = true;
     }
   }, [state.cameraPreset]);
+
+  useEffect(() => {
+    if (gamePhase === 'playing') {
+      cameraAnimatingRef.current = true;
+    }
+  }, [gamePhase]);
 
   useEffect(() => {
     const container = mountRef.current;
@@ -424,6 +446,84 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
     dragHighlightRing.position.y = 0.006;
     dragHighlightRing.visible = false;
     scene.add(dragHighlightRing);
+
+    // Vòng tâm ngắm 3D + Mũi tên Beacon lơ lửng báo hiệu thiết bị đang điều khiển bằng phím WASD / Q-E (Game Reticle)
+    const activeSelectionGroup = new THREE.Group();
+    scene.add(activeSelectionGroup);
+
+    const activeOuterRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.41, 0.46, 40),
+      new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.78,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    activeOuterRing.rotation.x = -Math.PI / 2;
+    activeOuterRing.position.y = 0.007;
+    activeSelectionGroup.add(activeOuterRing);
+
+    const activeInnerRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.32, 0.345, 32),
+      new THREE.MeshBasicMaterial({
+        color: 0xfbbf24,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.65,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    activeInnerRing.rotation.x = -Math.PI / 2;
+    activeInnerRing.position.y = 0.0075;
+    activeSelectionGroup.add(activeInnerRing);
+
+    const activeBeaconCone = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.055, 0),
+      new THREE.MeshBasicMaterial({
+        color: 0xfbbf24,
+        transparent: true,
+        opacity: 0.9,
+      }),
+    );
+    activeBeaconCone.position.y = 1.62;
+    activeSelectionGroup.add(activeBeaconCone);
+
+    // Hệ hạt 3D chúc mừng khi hoàn thành mục tiêu Nhiệm vụ (Pooled 3D Celebration Particle Burst)
+    const burstCount = 72;
+    const burstGeo = new THREE.BufferGeometry();
+    const burstPositions = new Float32Array(burstCount * 3);
+    const burstColors = new Float32Array(burstCount * 3);
+    const burstVelocities: { vx: number; vy: number; vz: number }[] = [];
+
+    for (let i = 0; i < burstCount; i++) {
+      burstVelocities.push({ vx: 0, vy: 0, vz: 0 });
+      const isGold = i % 2 === 0;
+      burstColors[i * 3] = isGold ? 1.0 : 0.2;
+      burstColors[i * 3 + 1] = isGold ? 0.84 : 0.95;
+      burstColors[i * 3 + 2] = isGold ? 0.25 : 0.62;
+    }
+    burstGeo.setAttribute('position', new THREE.BufferAttribute(burstPositions, 3));
+    burstGeo.setAttribute('color', new THREE.BufferAttribute(burstColors, 3));
+
+    const burstMat = new THREE.PointsMaterial({
+      map: beamHitGlowTexture,
+      size: 0.11,
+      sizeAttenuation: true,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const celebrationPoints = new THREE.Points(burstGeo, burstMat);
+    celebrationPoints.visible = false;
+    celebrationPoints.frustumCulled = false;
+    celebrationPoints.renderOrder = 8;
+    scene.add(celebrationPoints);
 
     // =========================================================================
     // A. BÀN GỖ PHÒNG THÍ NGHIỆM CÓ CHÂN BÀN (WOODEN LABORATORY TABLE WITH LEGS)
@@ -2120,6 +2220,9 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
       if (type === 'toggle_lamp') {
         const cur = stateRef.current;
         const nextOn = !cur.lampOn || cur.lampIntensity <= 0.001;
+        gameAudio.playLampPowerSound(nextOn);
+        bounceTargetKey = 'lamp';
+        bounceTimer = 0.18;
         onUpdateStateRef.current({
           lampOn: nextOn,
           lampIntensity: nextOn && cur.lampIntensity <= 0.001 ? 0.8 : cur.lampIntensity,
@@ -2128,6 +2231,13 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
       }
 
       if (!objKey) return;
+
+      if (selectedObjectRef.current !== objKey) {
+        onSelectObjectRef.current?.(objKey);
+        gameAudio.playSelectSound();
+      }
+      bounceTargetKey = objKey;
+      bounceTimer = 0.15;
 
       const st = stateRef.current;
       const wantsRotate =
@@ -2310,7 +2420,11 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
           activeDrag.objectKey === 'switch' &&
           !activeDrag.moved
         ) {
-          onUpdateStateRef.current({ circuitClosed: !stateRef.current.circuitClosed });
+          const nextClosed = !stateRef.current.circuitClosed;
+          gameAudio.playSwitchSound(nextClosed);
+          bounceTargetKey = 'switch';
+          bounceTimer = 0.18;
+          onUpdateStateRef.current({ circuitClosed: nextClosed });
         }
         activeDrag = null;
         controls.enabled = true;
@@ -2318,10 +2432,95 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
       }
     };
 
+    // Bộ điều khiển bàn phím 60fps kiểu Game (Held Keys cho chuyển động mượt WASD/Q-E/R-F + Edge Keys cho hành động tức thời)
+    const heldKeys = new Set<string>();
+    const onGameKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      heldKeys.add(e.code);
+
+      if (gamePhaseRef.current !== 'playing') return;
+      if (e.repeat) return;
+
+      const st = stateRef.current;
+      if (e.code === 'Digit1') {
+        onSelectObjectRef.current?.('lamp');
+        gameAudio.playSelectSound();
+        bounceTargetKey = 'lamp';
+        bounceTimer = 0.16;
+      } else if (e.code === 'Digit2') {
+        onSelectObjectRef.current?.('occluder');
+        gameAudio.playSelectSound();
+        if (!st.occluderActive) {
+          onUpdateStateRef.current({ occluderActive: true, occluderInsertion: 1.0 });
+        }
+        bounceTargetKey = 'occluder';
+        bounceTimer = 0.16;
+      } else if (e.code === 'Digit3') {
+        onSelectObjectRef.current?.('pv');
+        gameAudio.playSelectSound();
+        bounceTargetKey = 'pv';
+        bounceTimer = 0.16;
+      } else if (e.code === 'Digit4') {
+        onSelectObjectRef.current?.('switch');
+        gameAudio.playSelectSound();
+        bounceTargetKey = 'switch';
+        bounceTimer = 0.16;
+      } else if (e.code === 'Digit5') {
+        onSelectObjectRef.current?.('galvano');
+        gameAudio.playSelectSound();
+        bounceTargetKey = 'galvano';
+        bounceTimer = 0.16;
+      } else if (e.code === 'Space') {
+        e.preventDefault();
+        const nextOn = !st.lampOn || st.lampIntensity <= 0.001;
+        gameAudio.playLampPowerSound(nextOn);
+        bounceTargetKey = 'lamp';
+        bounceTimer = 0.18;
+        onUpdateStateRef.current({
+          lampOn: nextOn,
+          lampIntensity: nextOn && st.lampIntensity <= 0.001 ? 0.8 : st.lampIntensity,
+        });
+      } else if (e.code === 'KeyC') {
+        const nextClosed = !st.circuitClosed;
+        gameAudio.playSwitchSound(nextClosed);
+        bounceTargetKey = 'switch';
+        bounceTimer = 0.18;
+        onUpdateStateRef.current({ circuitClosed: nextClosed });
+      } else if (e.code === 'KeyV') {
+        const nextOcc = !st.occluderActive;
+        gameAudio.playSwitchSound(nextOcc);
+        bounceTargetKey = 'occluder';
+        bounceTimer = 0.18;
+        onUpdateStateRef.current({
+          occluderActive: nextOcc,
+          occluderInsertion: 1.0,
+        });
+        if (nextOcc) {
+          onSelectObjectRef.current?.('occluder');
+        }
+      } else if (e.code === 'KeyX') {
+        gameAudio.playSwitchSound(!st.wiringReversed);
+        bounceTargetKey = 'galvano';
+        bounceTimer = 0.16;
+        onUpdateStateRef.current({ wiringReversed: !st.wiringReversed });
+      }
+    };
+
+    const onGameKeyUp = (e: KeyboardEvent) => {
+      heldKeys.delete(e.code);
+    };
+
+    const onWindowBlur = () => {
+      heldKeys.clear();
+    };
+
     const domElem = renderer.domElement;
     domElem.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('keydown', onGameKeyDown);
+    window.addEventListener('keyup', onGameKeyUp);
+    window.addEventListener('blur', onWindowBlur);
 
     // =========================================================================
     // J. VÒNG LẶP ĐỒNG BỘ VẬT LÍ -> ĐỒ HỌA 3D & RENDER LOOP
@@ -2330,6 +2529,13 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
     const clock = new THREE.Clock();
     let carrierPhase = 0;
     let dustElapsedTime = 0;
+    let gameElapsedTime = 0;
+    let titleOrbitAngle = 0;
+    let bounceTargetKey: ControllableObjectKey | null = null;
+    let bounceTimer = 0;
+    let lastCelebrationId = celebrationTriggerRef.current;
+    let burstTimer = 0;
+    let cameraShakeTimer = 0;
     let knifeAngleRad = stateRef.current.circuitClosed ? 0 : 0.72;
     let frameId = 0;
     let frameCount = 0;
@@ -3175,8 +3381,218 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
       const currentNeedleDeg = needleDynamics.step(phys.galvanometer.targetAngleDeg, dt);
       needlePivotGroup.rotation.z = THREE.MathUtils.degToRad(-currentNeedleDeg);
 
-      // 9. Chuyển góc nhìn Camera mượt
-      if (cameraAnimatingRef.current) {
+      // 8B. Xử lý điều khiển bàn phím 60fps mượt mà (WASD / Phím mũi tên / Q-E / R-F) khi đang chơi
+      gameElapsedTime += dt;
+      if (gamePhaseRef.current === 'playing' && !activeDrag && heldKeys.size > 0) {
+        const selObj = selectedObjectRef.current;
+        let moveX = 0;
+        let moveZ = 0;
+        if (heldKeys.has('KeyA') || heldKeys.has('ArrowLeft')) moveX -= 1;
+        if (heldKeys.has('KeyD') || heldKeys.has('ArrowRight')) moveX += 1;
+        if (heldKeys.has('KeyW') || heldKeys.has('ArrowUp')) moveZ -= 1;
+        if (heldKeys.has('KeyS') || heldKeys.has('ArrowDown')) moveZ += 1;
+
+        const patch: Partial<ExperimentState> = {};
+        let hasPatch = false;
+
+        if (moveX !== 0 || moveZ !== 0) {
+          const norm = 1 / Math.hypot(moveX, moveZ);
+          const speed = 1.45 * dt;
+          const curXZ = getObjectXZ(st, selObj);
+          const rawPos = {
+            x: curXZ.x + moveX * norm * speed,
+            z: curXZ.z + moveZ * norm * speed,
+          };
+          const resolved = resolveTableCollision(selObj, rawPos, st);
+
+          if (selObj === 'lamp') {
+            const newDist = vecLen(
+              vecSub(
+                { x: st.pvPos.x, y: SCENE_GEOMETRY.pvCenterY, z: st.pvPos.z },
+                { x: resolved.x, y: st.lampHeight, z: resolved.z },
+              ),
+            );
+            patch.lampPos = resolved;
+            patch.lampDistance = Number(
+              clamp(newDist, SCENE_GEOMETRY.minDistance, SCENE_GEOMETRY.maxDistance).toFixed(2),
+            );
+            hasPatch = true;
+          } else if (selObj === 'pv') {
+            const newDist = vecLen(
+              vecSub(
+                { x: resolved.x, y: SCENE_GEOMETRY.pvCenterY, z: resolved.z },
+                { x: st.lampPos.x, y: st.lampHeight, z: st.lampPos.z },
+              ),
+            );
+            patch.pvPos = resolved;
+            patch.lampDistance = Number(
+              clamp(newDist, SCENE_GEOMETRY.minDistance, SCENE_GEOMETRY.maxDistance).toFixed(2),
+            );
+            hasPatch = true;
+          } else if (selObj === 'occluder') {
+            patch.occluderActive = true;
+            patch.occluderPos = resolved;
+            patch.occluderInsertion = 1.0;
+            hasPatch = true;
+          } else if (selObj === 'switch') {
+            patch.switchPos = resolved;
+            hasPatch = true;
+          } else if (selObj === 'galvano') {
+            patch.galvanoPos = resolved;
+            hasPatch = true;
+          }
+        }
+
+        // Q / E: Xoay góc ngang (Yaw) của thiết bị đang chọn
+        let rotDir = 0;
+        if (heldKeys.has('KeyQ')) rotDir -= 1;
+        if (heldKeys.has('KeyE')) rotDir += 1;
+        if (rotDir !== 0) {
+          const degDelta = rotDir * 68 * dt;
+          if (selObj === 'lamp') {
+            patch.lampYawDeg = Number(clamp(st.lampYawDeg + degDelta, -75, 75).toFixed(1));
+            hasPatch = true;
+          } else if (selObj === 'pv') {
+            patch.pvYawDeg = Number(clamp(st.pvYawDeg + degDelta, -85, 85).toFixed(1));
+            hasPatch = true;
+          } else if (selObj === 'occluder') {
+            patch.occluderYawDeg = Number(clamp(st.occluderYawDeg + degDelta, -75, 75).toFixed(1));
+            hasPatch = true;
+          }
+        }
+
+        // R / F: Tăng/giảm độ sáng đèn (0% -> 100%)
+        let brightDir = 0;
+        if (heldKeys.has('KeyR')) brightDir += 1;
+        if (heldKeys.has('KeyF')) brightDir -= 1;
+        if (brightDir !== 0) {
+          const nextInt = Number(clamp(st.lampIntensity + brightDir * 0.55 * dt, 0, 1).toFixed(3));
+          patch.lampIntensity = nextInt;
+          patch.lampOn = nextInt > 0.001 ? true : st.lampOn;
+          hasPatch = true;
+        }
+
+        if (hasPatch) {
+          onUpdateStateRef.current(patch);
+        }
+      }
+
+      // 8C. Cập nhật vòng tâm ngắm 3D & Mũi tên Beacon trên thiết bị đang chọn + hiệu ứng nhún (Squash-and-stretch)
+      const activeKey = selectedObjectRef.current;
+      const activeXZ = getObjectXZ(st, activeKey);
+      activeSelectionGroup.visible = gamePhaseRef.current === 'playing';
+      if (activeSelectionGroup.visible) {
+        const selX = activeKey === 'lamp' ? standX : activeXZ.x;
+        const selZ = activeKey === 'lamp' ? standZ : activeXZ.z;
+        activeSelectionGroup.position.set(selX, 0, selZ);
+        activeOuterRing.rotation.z = gameElapsedTime * 1.1;
+        activeInnerRing.rotation.z = -gameElapsedTime * 1.6;
+        const ringPulse = 1 + Math.sin(gameElapsedTime * 5.2) * 0.05;
+        activeOuterRing.scale.set(ringPulse, ringPulse, 1);
+
+        const beaconBaseY =
+          activeKey === 'lamp'
+            ? lampTf.position.y + 0.34
+            : activeKey === 'pv'
+              ? pvBasis.center.y + 0.42
+              : activeKey === 'occluder'
+                ? 1.42
+                : activeKey === 'galvano'
+                  ? 1.24
+                  : 0.32;
+        activeBeaconCone.position.y = beaconBaseY + Math.sin(gameElapsedTime * 5.5) * 0.045;
+        activeBeaconCone.rotation.y = gameElapsedTime * 2.4;
+      }
+
+      if (bounceTimer > 0) {
+        bounceTimer = Math.max(0, bounceTimer - dt);
+        const s = 1 + Math.sin((bounceTimer / 0.18) * Math.PI) * 0.08;
+        lampStandGroup.scale.set(
+          bounceTargetKey === 'lamp' ? s : 1,
+          1,
+          bounceTargetKey === 'lamp' ? s : 1,
+        );
+        pvStandGroup.scale.set(
+          bounceTargetKey === 'pv' ? s : 1,
+          1,
+          bounceTargetKey === 'pv' ? s : 1,
+        );
+        occluderStandGroup.scale.set(
+          bounceTargetKey === 'occluder' ? s : 1,
+          1,
+          bounceTargetKey === 'occluder' ? s : 1,
+        );
+        switchGroup.scale.set(
+          bounceTargetKey === 'switch' ? s : 1,
+          1,
+          bounceTargetKey === 'switch' ? s : 1,
+        );
+        galvanoGroup.scale.set(
+          bounceTargetKey === 'galvano' ? s : 1,
+          1,
+          bounceTargetKey === 'galvano' ? s : 1,
+        );
+      } else {
+        lampStandGroup.scale.set(1, 1, 1);
+        pvStandGroup.scale.set(1, 1, 1);
+        occluderStandGroup.scale.set(1, 1, 1);
+        switchGroup.scale.set(1, 1, 1);
+        galvanoGroup.scale.set(1, 1, 1);
+      }
+
+      // 8D. Kích hoạt & cập nhật hạt pháo sáng 3D khi hoàn thành Nhiệm vụ
+      if (celebrationTriggerRef.current !== lastCelebrationId) {
+        lastCelebrationId = celebrationTriggerRef.current;
+        burstTimer = 1.35;
+        cameraShakeTimer = 0.28;
+        celebrationPoints.visible = true;
+        burstMat.opacity = 1;
+        const bPos = burstGeo.getAttribute('position') as THREE.BufferAttribute;
+        for (let i = 0; i < burstCount; i++) {
+          const originX = i % 2 === 0 ? pvBasis.center.x : st.galvanoPos.x;
+          const originY = i % 2 === 0 ? pvBasis.center.y : 0.78;
+          const originZ = i % 2 === 0 ? pvBasis.center.z : st.galvanoPos.z;
+          bPos.setXYZ(i, originX, originY, originZ);
+          const theta = (i / burstCount) * Math.PI * 2 + (i % 5) * 0.3;
+          const speedH = 0.45 + (i % 7) * 0.16;
+          burstVelocities[i].vx = Math.cos(theta) * speedH;
+          burstVelocities[i].vy = 1.15 + (i % 5) * 0.28;
+          burstVelocities[i].vz = Math.sin(theta) * speedH;
+        }
+        bPos.needsUpdate = true;
+      }
+
+      if (burstTimer > 0) {
+        burstTimer = Math.max(0, burstTimer - dt);
+        const bPos = burstGeo.getAttribute('position') as THREE.BufferAttribute;
+        for (let i = 0; i < burstCount; i++) {
+          const vx = burstVelocities[i].vx;
+          const vy = burstVelocities[i].vy;
+          const vz = burstVelocities[i].vz;
+          burstVelocities[i].vy -= 2.4 * dt;
+          bPos.setXYZ(
+            i,
+            bPos.getX(i) + vx * dt,
+            Math.max(0.03, bPos.getY(i) + vy * dt),
+            bPos.getZ(i) + vz * dt,
+          );
+        }
+        bPos.needsUpdate = true;
+        burstMat.opacity = THREE.MathUtils.clamp(burstTimer / 0.85, 0, 1);
+        if (burstTimer <= 0) {
+          celebrationPoints.visible = false;
+        }
+      }
+
+      // 9. Chuyển góc nhìn Camera mượt hoặc quay toàn cảnh trên Màn hình Mở đầu (Title Screen Live Camera Pan)
+      if (gamePhaseRef.current === 'title') {
+        titleOrbitAngle += dt * 0.22;
+        const radius = 4.15;
+        camera.position.x = Math.sin(titleOrbitAngle) * radius * 0.55;
+        camera.position.y = 2.28 + Math.sin(titleOrbitAngle * 0.7) * 0.18;
+        camera.position.z = Math.cos(titleOrbitAngle) * 0.65 + 3.45;
+        controls.target.set(-0.08, 0.74, -0.05);
+      } else if (cameraAnimatingRef.current) {
         const preset = CAMERA_PRESETS[activeCameraPresetRef.current];
         const dampLambda = 7.5;
         camera.position.x = THREE.MathUtils.damp(camera.position.x, preset.pos[0], dampLambda, dt);
@@ -3211,10 +3627,17 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
         }
       }
 
+      if (cameraShakeTimer > 0) {
+        cameraShakeTimer = Math.max(0, cameraShakeTimer - dt);
+        const mag = cameraShakeTimer * 0.032;
+        camera.position.x += Math.sin(gameElapsedTime * 48) * mag;
+        camera.position.y += Math.cos(gameElapsedTime * 54) * mag;
+      }
+
       controls.update();
 
       // 10. Chiếu nhãn 2D sắc nét đặt phía sau / phía trên vật thể để KHÔNG che khuất nút bấm & thiết bị
-      if (st.showLabels) {
+      if (st.showLabels && gamePhaseRef.current !== 'title') {
         const w = renderer.domElement.clientWidth;
         const h = renderer.domElement.clientHeight;
         const projectPoint = (x: number, y: number, z: number) => {
@@ -3253,7 +3676,10 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
         const nextLabels: ProjectedLabel[] = [
           {
             id: 'lamp',
-            title: 'Đèn chiếu (Kéo để di chuyển)',
+            title:
+              selectedObjectRef.current === 'lamp'
+                ? '[1] Đèn chiếu · ĐANG ĐIỀU KHIỂN'
+                : '[1] Đèn chiếu',
             subtitle: hasLampLight
               ? `Đang bật (${Math.round(st.lampIntensity * 100)}%)`
               : st.lampOn
@@ -3263,6 +3689,10 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
             y: pLamp.y,
             visible: pLamp.visible,
             tone: hasLampLight ? 'amber' : 'default',
+            onClick: () => {
+              onSelectObjectRef.current?.('lamp');
+              gameAudio.playSelectSound();
+            },
           },
           {
             id: 'lamp-power-btn',
@@ -3276,6 +3706,9 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
             onClick: () => {
               const cur = stateRef.current;
               const nextOn = !cur.lampOn || cur.lampIntensity <= 0.001;
+              gameAudio.playLampPowerSound(nextOn);
+              bounceTargetKey = 'lamp';
+              bounceTimer = 0.18;
               onUpdateStateRef.current({
                 lampOn: nextOn,
                 lampIntensity: nextOn && cur.lampIntensity <= 0.001 ? 0.8 : cur.lampIntensity,
@@ -3284,7 +3717,10 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
           },
           {
             id: 'pv',
-            title: 'Pin quang điện + Pháp tuyến n⃗',
+            title:
+              selectedObjectRef.current === 'pv'
+                ? '[3] Pin quang điện · ĐANG ĐIỀU KHIỂN'
+                : '[3] Pin quang điện + Pháp tuyến n⃗',
             subtitle:
               st.occluderActive && (umbraPct > 0 || penumbraPct > 0)
                 ? `Vùng tối: ${umbraPct}% · Nửa tối: ${penumbraPct}% · Sáng hữu hiệu: ${Math.round(Math.min(1, phys.illumination.effectiveIrradiance) * 100)}%`
@@ -3293,10 +3729,17 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
             y: pPv.y,
             visible: pPv.visible,
             tone: phys.illumination.effectiveIrradiance > 0.02 ? 'emerald' : 'default',
+            onClick: () => {
+              onSelectObjectRef.current?.('pv');
+              gameAudio.playSelectSound();
+            },
           },
           {
             id: 'galvano',
-            title: 'Điện kế (Thang tương đối)',
+            title:
+              selectedObjectRef.current === 'galvano'
+                ? '[5] Điện kế · ĐANG ĐIỀU KHIỂN'
+                : '[5] Điện kế (Thang tương đối)',
             subtitle:
               Math.abs(phys.galvanometer.targetScaleDivision) >= 0.08
                 ? `Kim lệch: ${phys.galvanometer.targetScaleDivision > 0 ? '+' : ''}${phys.galvanometer.targetScaleDivision.toFixed(1)} vạch`
@@ -3305,17 +3748,26 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
             y: pGalv.y,
             visible: pGalv.visible,
             tone: Math.abs(phys.galvanometer.targetScaleDivision) >= 0.08 ? 'emerald' : 'default',
+            onClick: () => {
+              onSelectObjectRef.current?.('galvano');
+              gameAudio.playSelectSound();
+            },
           },
           {
             id: 'switch',
-            title: st.circuitClosed ? 'Khóa mạch: Kín' : 'Khóa mạch: Hở',
-            subtitle: 'Nhấn để Đóng / Ngắt mạch',
+            title: st.circuitClosed ? '[4] Khóa mạch: Kín' : '[4] Khóa mạch: Hở',
+            subtitle: 'Nhấn chuột hoặc phím C để Đóng/Mở',
             x: pSwitch.x,
             y: pSwitch.y,
             visible: pSwitch.visible,
             tone: st.circuitClosed ? 'default' : 'rose',
-            onClick: () =>
-              onUpdateStateRef.current({ circuitClosed: !stateRef.current.circuitClosed }),
+            onClick: () => {
+              const nextClosed = !stateRef.current.circuitClosed;
+              gameAudio.playSwitchSound(nextClosed);
+              bounceTargetKey = 'switch';
+              bounceTimer = 0.18;
+              onUpdateStateRef.current({ circuitClosed: nextClosed });
+            },
           },
         ];
 
@@ -3323,7 +3775,10 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
           const pOcc = projectPoint(occTf.center.x, occTf.center.y + 0.58, occTf.center.z - 0.14);
           nextLabels.push({
             id: 'occluder',
-            title: 'Vật cản sáng (Kéo trên bàn)',
+            title:
+              selectedObjectRef.current === 'occluder'
+                ? '[2] Vật cản sáng · ĐANG ĐIỀU KHIỂN'
+                : '[2] Vật cản sáng (WASD / Kéo)',
             subtitle:
               umbraPct > 0 || penumbraPct > 0
                 ? `Tạo vùng tối (${umbraPct}%) & vùng nửa tối (${penumbraPct}%) trên mặt pin`
@@ -3332,6 +3787,10 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
             y: pOcc.y,
             visible: pOcc.visible,
             tone: 'rose',
+            onClick: () => {
+              onSelectObjectRef.current?.('occluder');
+              gameAudio.playSelectSound();
+            },
           });
         }
 
@@ -3387,6 +3846,9 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
       domElem.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('keydown', onGameKeyDown);
+      window.removeEventListener('keyup', onGameKeyUp);
+      window.removeEventListener('blur', onWindowBlur);
       controls.removeEventListener('start', onControlsStart);
       controls.dispose();
 
@@ -3429,98 +3891,14 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
       {/* Dedicated WebGL Mount Container */}
       <div ref={mountRef} className="w-full h-full cursor-grab active:cursor-grabbing" />
 
-      {/* Thanh công cụ nhanh chế độ Kéo Di chuyển vs Xoay hướng & Vật cản sáng ở góc trên trái (nền trong suốt mờ nhẹ) */}
-      <div className="fixed top-14 left-3 z-20 flex flex-wrap items-center gap-1.5 pointer-events-auto">
-        <div className="flex items-center bg-slate-950/45 backdrop-blur-md border border-white/15 rounded-lg p-1 shadow-lg">
-          <button
-            type="button"
-            onClick={() => onUpdateState({ dragInteractionMode: 'translate' })}
-            className={`flex items-center gap-1.5 min-h-[34px] px-2.5 py-1 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
-              state.dragInteractionMode === 'translate'
-                ? 'bg-amber-500/90 text-slate-950'
-                : 'text-slate-200 hover:text-white'
-            }`}
-            title="Kéo trực tiếp các thiết bị trượt tự do trên mặt bàn gỗ"
-          >
-            <Move className="w-3.5 h-3.5" />
-            <span>Kéo di chuyển vật thể</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => onUpdateState({ dragInteractionMode: 'rotate' })}
-            className={`flex items-center gap-1.5 min-h-[34px] px-2.5 py-1 rounded-md text-xs font-semibold transition-colors cursor-pointer ${
-              state.dragInteractionMode === 'rotate'
-                ? 'bg-amber-500/90 text-slate-950'
-                : 'text-slate-200 hover:text-white'
-            }`}
-            title="Kéo trên đầu đèn, tấm pin hoặc vật cản để xoay góc chiếu / góc đón sáng"
-          >
-            <RotateCw className="w-3.5 h-3.5" />
-            <span>Kéo xoay góc</span>
-          </button>
-        </div>
-
-        <button
-          type="button"
-          onClick={() =>
-            onUpdateState({
-              occluderActive: !state.occluderActive,
-              occluderInsertion: 1.0,
-            })
-          }
-          className={`flex items-center gap-1.5 min-h-[42px] px-3 py-1.5 rounded-lg border text-xs font-semibold shadow-lg backdrop-blur-md transition-colors cursor-pointer ${
-            state.occluderActive
-              ? 'bg-rose-600/75 text-white border-rose-400/60'
-              : 'bg-slate-950/45 text-slate-100 border-white/15 hover:border-white/30'
-          }`}
-        >
-          <ShieldAlert className="w-3.5 h-3.5" />
-          <span>{state.occluderActive ? 'Vật cản sáng: ĐANG ĐẶT TRÊN BÀN' : 'Đặt Vật cản sáng lên bàn'}</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onUpdateState({ darkLabVisualMode: !state.darkLabVisualMode })}
-          className={`flex items-center gap-1.5 min-h-[42px] px-3 py-1.5 rounded-lg border text-xs font-semibold shadow-lg backdrop-blur-md transition-colors cursor-pointer ${
-            state.darkLabVisualMode
-              ? 'bg-blue-950/55 text-sky-200 border-blue-400/50'
-              : 'bg-slate-950/45 text-slate-100 border-white/15 hover:border-white/30'
-          }`}
-          title="Bật/tắt chế độ ánh sáng môi trường tối (Ambient Light) kết hợp đèn Spotlight màu xanh đêm để làm nổi bật chùm sáng thực nghiệm"
-        >
-          {state.darkLabVisualMode ? (
-            <Moon className="w-3.5 h-3.5 text-sky-400" />
-          ) : (
-            <Sun className="w-3.5 h-3.5 text-amber-400" />
-          )}
-          <span>
-            {state.darkLabVisualMode
-              ? 'Phòng tối (Spotlight xanh đêm): BẬT'
-              : 'Phòng sáng tiêu chuẩn'}
-          </span>
-        </button>
-
-        {onOpenTutorial && (
-          <button
-            type="button"
-            onClick={onOpenTutorial}
-            className="flex items-center gap-1.5 min-h-[42px] px-3 py-1.5 rounded-lg border border-white/15 bg-slate-950/45 backdrop-blur-md text-xs font-semibold text-slate-100 hover:border-white/30 hover:text-amber-300 shadow-lg transition-colors cursor-pointer"
-            title="Xem lại hướng dẫn thao tác (Phím tắt: ?)"
-          >
-            <HelpCircle className="w-3.5 h-3.5 text-amber-400" />
-            <span>Hướng dẫn</span>
-          </button>
-        )}
-      </div>
-
-      {/* Thông báo khi đang kéo hoặc trỏ vào vật thể 3D (nền trong suốt mờ nhẹ) */}
-      {(activeDragLabel || hoveredInteractive) && (
-        <div className="pointer-events-none fixed top-14 left-1/2 -translate-x-1/2 z-20 px-3.5 py-1.5 rounded-lg bg-slate-950/45 backdrop-blur-md border border-amber-400/40 text-xs font-medium text-amber-100 shadow-lg whitespace-nowrap">
+      {/* Thông báo khi đang kéo hoặc trỏ vào vật thể 3D */}
+      {gamePhase === 'playing' && (activeDragLabel || hoveredInteractive) && (
+        <div className="pointer-events-none fixed top-16 left-1/2 -translate-x-1/2 z-20 px-3.5 py-1 rounded-lg bg-slate-950/90 border border-amber-400/50 text-xs font-medium text-amber-100 shadow-lg whitespace-nowrap">
           {activeDragLabel || hoveredInteractive}
         </div>
       )}
 
-      {/* Lớp nhãn 2D neo phía sau / bên trái vật thể 3D với nền kính mờ trong suốt (translucent frosted glass) */}
+      {/* Lớp nhãn 2D neo phía sau / bên trái vật thể 3D (không dùng backdrop-filter để giữ 60fps trên WebGL) */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden z-10">
         {labels.map(
           (lbl) =>
@@ -3541,34 +3919,33 @@ export const LabViewport3D: React.FC<LabViewport3DProps> = ({
                   onClick={lbl.onClick}
                   className={`${
                     lbl.compact ? 'px-2 py-0.5 rounded-md' : 'px-2.5 py-1 rounded-lg'
-                  } border text-left shadow-sm backdrop-blur-md ${
+                  } border text-left shadow-sm ${
                     lbl.onClick
-                      ? 'pointer-events-auto cursor-pointer hover:bg-slate-900/55 active:scale-95 transition-all'
+                      ? 'pointer-events-auto cursor-pointer hover:bg-slate-900/95 active:scale-95 transition-all'
                       : ''
                   } ${
                     lbl.tone === 'amber'
-                      ? 'bg-slate-950/35 border-amber-400/40 text-amber-50'
+                      ? 'bg-slate-950/85 border-amber-400/50 text-amber-50'
                       : lbl.tone === 'emerald'
-                        ? 'bg-slate-950/35 border-emerald-400/45 text-emerald-100'
+                        ? 'bg-slate-950/85 border-emerald-400/55 text-emerald-100'
                         : lbl.tone === 'rose'
-                          ? 'bg-slate-950/35 border-rose-400/45 text-rose-100'
-                          : 'bg-slate-950/35 border-white/20 text-slate-100'
+                          ? 'bg-slate-950/85 border-rose-400/55 text-rose-100'
+                          : 'bg-slate-950/85 border-white/20 text-slate-100'
                   }`}
                 >
                   <div
                     className={`${
                       lbl.compact ? 'text-[10px] tracking-wide' : 'text-[11px]'
-                    } font-semibold leading-tight whitespace-nowrap drop-shadow-sm`}
+                    } font-semibold leading-tight whitespace-nowrap`}
                   >
                     {lbl.title}
                   </div>
                   {lbl.subtitle && (
-                    <div className="text-[10px] text-slate-200/90 leading-tight mt-0.5 max-w-[240px] drop-shadow-sm">
+                    <div className="text-[10px] text-slate-200/90 leading-tight mt-0.5 max-w-[240px]">
                       {lbl.subtitle}
                     </div>
                   )}
                 </div>
-                {/* Đường dẫn mảnh từ khung hướng dẫn tới thiết bị */}
                 {lbl.placement === 'left' ? (
                   <div className="w-2.5 h-px bg-white/30" />
                 ) : (

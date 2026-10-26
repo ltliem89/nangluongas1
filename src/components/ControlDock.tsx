@@ -6,8 +6,10 @@ import {
   Eye,
   Lightbulb,
   Minus,
+  Move,
   Plus,
   RotateCcw,
+  RotateCw,
   ShieldAlert,
   Sliders,
   Zap,
@@ -22,6 +24,8 @@ import {
   VisualBeamMode,
   computeLampPosFromDistance,
 } from '../physics/SimulationEngine';
+import { CONTROLLABLE_OBJECTS, ControllableObjectKey } from '../game/missions';
+import { gameAudio } from '../audio/gameAudio';
 
 interface ControlDockProps {
   state: ExperimentState;
@@ -31,6 +35,8 @@ interface ControlDockProps {
   onUpdateState: (patch: Partial<ExperimentState>) => void;
   onReset: () => void;
   onOpenAuditModal: () => void;
+  selectedObject: ControllableObjectKey;
+  onSelectObject: (key: ControllableObjectKey) => void;
 }
 
 type DockTab = 'basic' | 'geometry' | 'display' | 'status';
@@ -43,6 +49,8 @@ export const ControlDock: React.FC<ControlDockProps> = ({
   onUpdateState,
   onReset,
   onOpenAuditModal,
+  selectedObject,
+  onSelectObject,
 }) => {
   const [activeTab, setActiveTab] = useState<DockTab>('basic');
 
@@ -71,56 +79,169 @@ export const ControlDock: React.FC<ControlDockProps> = ({
     onUpdateState({ [key]: next } as Partial<ExperimentState>);
   };
 
+  const activeDeviceMeta =
+    CONTROLLABLE_OBJECTS.find((item) => item.key === selectedObject) ?? CONTROLLABLE_OBJECTS[0];
+
   return (
-    <div
-      className="fixed bottom-0 left-1/2 -translate-x-1/2 z-30 w-full max-w-[980px] px-2 sm:px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))] pointer-events-none"
-    >
-      {/* Thanh nút thu gọn / mở rộng và tóm tắt nhanh luôn hiển thị */}
-      <div className="flex items-center justify-between gap-2 mb-1.5 pointer-events-auto">
-        <div className="flex items-center gap-1.5 bg-slate-950/95 border border-slate-800 rounded-lg px-3 py-1.5 shadow-lg overflow-x-auto max-w-[calc(100vw-150px)]">
-          <span className="text-xs font-semibold text-slate-200 whitespace-nowrap">
-            Đèn: {state.lampOn ? 'Đang bật' : 'Đang tắt'}
-          </span>
-          <span className="text-slate-600" aria-hidden="true">·</span>
-          <span className="text-xs text-slate-300 whitespace-nowrap tabular-nums">
-            Quang năng tới pin: <strong className="text-amber-300">{illumCategoryText}</strong>
-          </span>
-          <span className="text-slate-600" aria-hidden="true">·</span>
-          <span className="text-xs text-slate-300 whitespace-nowrap tabular-nums">
-            Mạch: <strong className={state.circuitClosed ? 'text-emerald-300' : 'text-rose-300'}>{state.circuitClosed ? 'Kín' : 'Hở'}</strong>
-          </span>
-          <span className="text-slate-600" aria-hidden="true">·</span>
-          <span className="text-xs text-slate-300 whitespace-nowrap tabular-nums">
-            Điện kế:{' '}
-            <strong className="text-sky-300 font-mono">
-              {Math.abs(needleDiv) < 0.08
-                ? '0.0 vạch'
-                : `${needleDiv > 0 ? '+' : ''}${needleDiv.toFixed(1)} vạch`}
-            </strong>
-          </span>
+    <div className="fixed bottom-0 left-1/2 -translate-x-1/2 z-30 w-full max-w-[1040px] px-2 sm:px-4 pb-[max(0.5rem,env(safe-area-inset-bottom))] pointer-events-none">
+      {/* Thanh Game Hotbar gọn nhẹ luôn hiển thị ở đáy màn hình (giữ >85% không gian 3D thông thoáng) */}
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5 pointer-events-auto">
+        {/* Cụm chọn nhanh 5 thiết bị thí nghiệm bằng phím 1–5 + Nút thao tác nhanh */}
+        <div className="flex items-center gap-1 bg-slate-950/95 border border-slate-800 rounded-xl p-1 shadow-xl overflow-x-auto max-w-full">
+          {CONTROLLABLE_OBJECTS.map((obj) => {
+            const isSelected = selectedObject === obj.key;
+            return (
+              <button
+                key={obj.key}
+                type="button"
+                onClick={() => {
+                  onSelectObject(obj.key);
+                  gameAudio.playSelectSound();
+                  if (obj.key === 'occluder' && !state.occluderActive) {
+                    onUpdateState({ occluderActive: true, occluderInsertion: 1.0 });
+                  }
+                }}
+                className={`flex items-center gap-1.5 min-h-[36px] px-2.5 py-1 rounded-lg text-xs font-semibold transition-all whitespace-nowrap shrink-0 cursor-pointer ${
+                  isSelected
+                    ? 'bg-amber-400 text-slate-950 shadow-sm'
+                    : 'bg-slate-900/90 text-slate-300 hover:bg-slate-800 hover:text-white'
+                }`}
+                title={obj.hint}
+              >
+                <span
+                  className={`inline-flex items-center justify-center w-4 h-4 rounded text-[10px] font-mono font-bold ${
+                    isSelected ? 'bg-slate-950 text-amber-300' : 'bg-slate-800 text-slate-400'
+                  }`}
+                >
+                  {obj.hotkey}
+                </span>
+                <span>{obj.shortName}</span>
+              </button>
+            );
+          })}
+
+          <div className="h-5 w-px bg-slate-800 mx-0.5 shrink-0" />
+
+          {/* Nút BẬT / TẮT ĐÈN (Phím Space) */}
+          <button
+            type="button"
+            onClick={() => {
+              const nextOn = !state.lampOn || state.lampIntensity <= 0.001;
+              gameAudio.playLampPowerSound(nextOn);
+              onUpdateState({
+                lampOn: nextOn,
+                lampIntensity: nextOn && state.lampIntensity <= 0.001 ? 0.8 : state.lampIntensity,
+              });
+            }}
+            className={`flex items-center gap-1 min-h-[36px] px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+              state.lampOn && state.lampIntensity > 0.001
+                ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-200'
+                : 'bg-rose-500/20 border-rose-400/50 text-rose-200'
+            }`}
+            title="Phím tắt: Space"
+          >
+            <Lightbulb className="w-3.5 h-3.5" />
+            <span>{state.lampOn && state.lampIntensity > 0.001 ? 'BẬT ĐÈN' : 'TẮT ĐÈN'}</span>
+          </button>
+
+          {/* Thanh trượt nhanh độ sáng 0% - 100% ngay trên Hotbar */}
+          <div className="hidden md:flex items-center gap-1.5 bg-slate-900/90 border border-slate-800 rounded-lg px-2.5 py-1 shrink-0">
+            <span className="text-[11px] text-slate-400 whitespace-nowrap">Sáng:</span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={state.lampIntensity}
+              onChange={(e) => {
+                const next = parseFloat(e.target.value);
+                onUpdateState({
+                  lampIntensity: next,
+                  lampOn: next > 0 ? true : state.lampOn,
+                });
+              }}
+              className="w-20 accent-amber-400 cursor-pointer"
+              title="Điều chỉnh độ sáng đèn từ 0% đến 100% (Phím R / F)"
+            />
+            <span className="text-[11px] font-mono font-semibold text-amber-300 tabular-nums w-8 text-right">
+              {Math.round(state.lampIntensity * 100)}%
+            </span>
+          </div>
+
+          {/* Chuyển đổi Kéo Di chuyển vs Kéo Xoay góc */}
+          <button
+            type="button"
+            onClick={() =>
+              onUpdateState({
+                dragInteractionMode:
+                  state.dragInteractionMode === 'translate' ? 'rotate' : 'translate',
+              })
+            }
+            className="hidden sm:flex items-center gap-1 min-h-[36px] px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-xs font-medium text-slate-200 hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            title="Chuyển chế độ chuột: Kéo di chuyển trên bàn hoặc Kéo xoay góc"
+          >
+            {state.dragInteractionMode === 'translate' ? (
+              <>
+                <Move className="w-3.5 h-3.5 text-amber-400" />
+                <span>Chuột: Di chuyển</span>
+              </>
+            ) : (
+              <>
+                <RotateCw className="w-3.5 h-3.5 text-sky-400" />
+                <span>Chuột: Xoay góc</span>
+              </>
+            )}
+          </button>
         </div>
 
+        {/* Nút mở rộng / thu gọn bảng tinh chỉnh chi tiết */}
         <button
           type="button"
           onClick={onToggleCollapse}
-          className="flex items-center gap-1.5 min-h-[40px] px-3.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-semibold text-slate-100 hover:bg-slate-800 transition-colors shadow-lg whitespace-nowrap shrink-0 cursor-pointer"
+          className="flex items-center gap-1.5 min-h-[38px] px-3 py-1.5 rounded-xl bg-slate-950/95 border border-slate-700 text-xs font-semibold text-slate-100 hover:bg-slate-900 transition-colors shadow-xl whitespace-nowrap shrink-0 cursor-pointer"
           title="Phím tắt: H"
         >
           {isCollapsed ? (
             <>
               <ChevronUp className="w-4 h-4 text-amber-400" />
-              <span>Hiện bảng điều khiển</span>
+              <span>Bảng thông số (H)</span>
             </>
           ) : (
             <>
               <ChevronDown className="w-4 h-4 text-slate-400" />
-              <span>Ẩn công cụ</span>
+              <span>Thu gọn (H)</span>
             </>
           )}
         </button>
       </div>
 
-      {/* Bảng điều khiển chính (ẩn hoàn toàn khi thu gọn để tối đa diện tích 3D) */}
+      {/* Dòng nhắc điều khiển WASD / Q-E cho thiết bị đang chọn */}
+      {isCollapsed && (
+        <div className="hidden sm:flex items-center justify-between px-3 py-1 rounded-lg bg-slate-950/90 border border-slate-800/90 text-[11px] text-slate-300 pointer-events-auto">
+          <div className="flex items-center gap-2 truncate">
+            <span className="font-semibold text-amber-300 whitespace-nowrap">
+              Đang điều khiển [{activeDeviceMeta.hotkey}] {activeDeviceMeta.shortName}:
+            </span>
+            <span className="text-slate-300 truncate">{activeDeviceMeta.hint}</span>
+          </div>
+          <div className="flex items-center gap-3 shrink-0 font-mono text-[11px] tabular-nums">
+            <span>
+              Quang năng: <strong className="text-amber-300">{illumPercent}%</strong>
+            </span>
+            <span>·</span>
+            <span>
+              Điện kế:{' '}
+              <strong className="text-sky-300">
+                {Math.abs(needleDiv) < 0.08
+                  ? '0.0 vạch'
+                  : `${needleDiv > 0 ? '+' : ''}${needleDiv.toFixed(1)} vạch`}
+              </strong>
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Bảng điều khiển mở rộng (ẩn mặc định hoặc khi thu gọn để tối đa diện tích 3D) */}
       {!isCollapsed && (
         <div className="bg-slate-950/95 border border-slate-800 rounded-xl shadow-2xl overflow-hidden pointer-events-auto">
           {/* Dòng giải thích nhân quả trực tiếp theo trạng thái thật */}
@@ -177,7 +298,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab('basic')}
-                className={`flex items-center gap-1.5 min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                className={`flex items-center gap-1.5 min-h-[36px] px-3 py-1 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
                   activeTab === 'basic'
                     ? 'bg-amber-500 text-slate-950'
                     : 'text-slate-300 hover:bg-slate-900'
@@ -190,7 +311,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab('geometry')}
-                className={`flex items-center gap-1.5 min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                className={`flex items-center gap-1.5 min-h-[36px] px-3 py-1 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
                   activeTab === 'geometry'
                     ? 'bg-amber-500 text-slate-950'
                     : 'text-slate-300 hover:bg-slate-900'
@@ -203,7 +324,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab('display')}
-                className={`flex items-center gap-1.5 min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                className={`flex items-center gap-1.5 min-h-[36px] px-3 py-1 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
                   activeTab === 'display'
                     ? 'bg-amber-500 text-slate-950'
                     : 'text-slate-300 hover:bg-slate-900'
@@ -216,7 +337,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab('status')}
-                className={`flex items-center gap-1.5 min-h-[38px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
+                className={`flex items-center gap-1.5 min-h-[36px] px-3 py-1 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
                   activeTab === 'status'
                     ? 'bg-amber-500 text-slate-950'
                     : 'text-slate-300 hover:bg-slate-900'
@@ -231,15 +352,15 @@ export const ControlDock: React.FC<ControlDockProps> = ({
               <button
                 type="button"
                 onClick={onOpenAuditModal}
-                className="min-h-[36px] px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 text-xs font-medium text-slate-200 hover:bg-slate-800 transition-colors whitespace-nowrap cursor-pointer"
+                className="min-h-[34px] px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 text-xs font-medium text-slate-200 hover:bg-slate-800 transition-colors whitespace-nowrap cursor-pointer"
               >
-                Kiểm thử & Nguồn SGK
+                Kiểm chứng SGK
               </button>
               <button
                 type="button"
                 onClick={onReset}
-                className="flex items-center gap-1 min-h-[36px] px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 text-xs font-medium text-slate-200 hover:bg-slate-800 transition-colors whitespace-nowrap cursor-pointer"
-                title="Đặt lại toàn bộ thí nghiệm về trạng thái ban đầu"
+                className="flex items-center gap-1 min-h-[34px] px-2.5 py-1 rounded-lg border border-slate-700 bg-slate-900 text-xs font-medium text-slate-200 hover:bg-slate-800 transition-colors whitespace-nowrap cursor-pointer"
+                title="Đặt lại thí nghiệm"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 <span>Đặt lại</span>
@@ -248,7 +369,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
           </div>
 
           {/* Nội dung từng Tab */}
-          <div className="p-3 sm:p-4 max-h-[36vh] overflow-y-auto">
+          <div className="p-3 sm:p-4 max-h-[32vh] overflow-y-auto">
             {activeTab === 'basic' && (
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-center">
                 {/* Cột 1: Công tắc chính (Bật/Tắt đèn, Vật chắn, Đóng/Mở mạch) */}
@@ -257,12 +378,13 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                     type="button"
                     onClick={() => {
                       const nextOn = !state.lampOn || state.lampIntensity <= 0.001;
+                      gameAudio.playLampPowerSound(nextOn);
                       onUpdateState({
                         lampOn: nextOn,
                         lampIntensity: nextOn && state.lampIntensity <= 0.001 ? 0.8 : state.lampIntensity,
                       });
                     }}
-                    className={`min-h-[48px] px-2.5 py-2 rounded-lg border text-xs font-semibold flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer ${
+                    className={`min-h-[46px] px-2.5 py-2 rounded-lg border text-xs font-semibold flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer ${
                       state.lampOn && state.lampIntensity > 0.001
                         ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-sm'
                         : 'bg-slate-900 text-slate-200 border-slate-700 hover:bg-slate-800'
@@ -276,13 +398,15 @@ export const ControlDock: React.FC<ControlDockProps> = ({
 
                   <button
                     type="button"
-                    onClick={() =>
+                    onClick={() => {
+                      const nextOcc = !state.occluderActive;
+                      gameAudio.playSwitchSound(nextOcc);
                       onUpdateState({
-                        occluderActive: !state.occluderActive,
+                        occluderActive: nextOcc,
                         occluderInsertion: 1.0,
-                      })
-                    }
-                    className={`min-h-[48px] px-2.5 py-2 rounded-lg border text-xs font-semibold flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer ${
+                      });
+                    }}
+                    className={`min-h-[46px] px-2.5 py-2 rounded-lg border text-xs font-semibold flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer ${
                       state.occluderActive
                         ? 'bg-rose-600 text-white border-rose-500'
                         : 'bg-slate-900 text-slate-200 border-slate-700 hover:bg-slate-800'
@@ -296,8 +420,12 @@ export const ControlDock: React.FC<ControlDockProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => onUpdateState({ circuitClosed: !state.circuitClosed })}
-                    className={`min-h-[48px] px-2.5 py-2 rounded-lg border text-xs font-semibold flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer ${
+                    onClick={() => {
+                      const nextClosed = !state.circuitClosed;
+                      gameAudio.playSwitchSound(nextClosed);
+                      onUpdateState({ circuitClosed: nextClosed });
+                    }}
+                    className={`min-h-[46px] px-2.5 py-2 rounded-lg border text-xs font-semibold flex flex-col items-center justify-center gap-1 transition-colors cursor-pointer ${
                       state.circuitClosed
                         ? 'bg-emerald-600 text-white border-emerald-500'
                         : 'bg-slate-900 text-rose-300 border-rose-700/60 hover:bg-slate-800'
@@ -328,7 +456,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                           lampOn: next > 0 ? true : state.lampOn,
                         });
                       }}
-                      className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
+                      className="min-w-[34px] min-h-[34px] flex items-center justify-center rounded bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
                       aria-label="Giảm độ sáng đèn"
                     >
                       <Minus className="w-3.5 h-3.5" />
@@ -357,7 +485,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                           lampOn: next > 0 ? true : state.lampOn,
                         });
                       }}
-                      className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
+                      className="min-w-[34px] min-h-[34px] flex items-center justify-center rounded bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
                       aria-label="Tăng độ sáng đèn"
                     >
                       <Plus className="w-3.5 h-3.5" />
@@ -391,7 +519,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                           lampHeight: tf.lampHeight,
                         });
                       }}
-                      className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
+                      className="min-w-[34px] min-h-[34px] flex items-center justify-center rounded bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
                       aria-label="Giảm khoảng cách đèn"
                     >
                       <Minus className="w-3.5 h-3.5" />
@@ -430,7 +558,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                           lampHeight: tf.lampHeight,
                         });
                       }}
-                      className="min-w-[36px] min-h-[36px] flex items-center justify-center rounded bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
+                      className="min-w-[34px] min-h-[34px] flex items-center justify-center rounded bg-slate-800 hover:bg-slate-700 text-slate-200 cursor-pointer"
                       aria-label="Tăng khoảng cách đèn"
                     >
                       <Plus className="w-3.5 h-3.5" />
@@ -445,7 +573,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                 {/* Chỉnh hướng chiếu đèn */}
                 <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-2.5">
                   <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="font-medium text-slate-200">Hướng chiếu đèn (Ngang)</span>
+                    <span className="font-medium text-slate-200">Hướng chiếu đèn (Q/E)</span>
                     <span className="font-mono text-amber-300 tabular-nums">{state.lampYawDeg}°</span>
                   </div>
                   <div className="flex items-center gap-1.5 mb-2">
@@ -508,9 +636,9 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                 {/* Xoay mặt pin quang điện & mức đẩy tấm chắn */}
                 <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-2.5">
                   <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="font-medium text-slate-200">Xoay mặt Pin quang điện</span>
+                    <span className="font-medium text-slate-200">Xoay mặt Pin (Phím 3 + Q/E)</span>
                     <span className="font-mono text-emerald-300 tabular-nums">
-                      {state.pvYawDeg}° (Góc tới: {Math.round(physics.illumination.incidenceAngleDeg)}°)
+                      {Math.round(state.pvYawDeg)}° (Góc tới: {Math.round(physics.illumination.incidenceAngleDeg)}°)
                     </span>
                   </div>
                   <div className="flex items-center gap-1.5 mb-2">
@@ -568,12 +696,15 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                 <div className="bg-slate-900/80 border border-slate-800 rounded-lg p-2.5 flex flex-col justify-between gap-2">
                   <div>
                     <div className="text-xs font-medium text-slate-200 mb-1">
-                      Đấu dây tại Điện kế (Zero-Center)
+                      Đấu dây tại Điện kế (Phím X)
                     </div>
                     <button
                       type="button"
-                      onClick={() => onUpdateState({ wiringReversed: !state.wiringReversed })}
-                      className={`w-full min-h-[38px] px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors cursor-pointer ${
+                      onClick={() => {
+                        gameAudio.playSwitchSound(!state.wiringReversed);
+                        onUpdateState({ wiringReversed: !state.wiringReversed });
+                      }}
+                      className={`w-full min-h-[36px] px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors cursor-pointer ${
                         state.wiringReversed
                           ? 'bg-sky-500/20 border-sky-400 text-sky-200'
                           : 'bg-slate-950 border-slate-700 text-slate-200 hover:bg-slate-800'
@@ -599,7 +730,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                               : 'sgk_controlled',
                         })
                       }
-                      className={`w-full min-h-[38px] px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors cursor-pointer ${
+                      className={`w-full min-h-[36px] px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors cursor-pointer ${
                         state.ambientMode === 'classroom_ambient'
                           ? 'bg-amber-500/20 border-amber-400 text-amber-200'
                           : 'bg-slate-950 border-slate-700 text-slate-200 hover:bg-slate-800'
@@ -633,7 +764,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                         key={mode}
                         type="button"
                         onClick={() => onUpdateState({ visualBeamMode: mode })}
-                        className={`min-h-[36px] px-2.5 py-1 rounded text-left text-xs font-medium border transition-colors cursor-pointer ${
+                        className={`min-h-[34px] px-2.5 py-1 rounded text-left text-xs font-medium border transition-colors cursor-pointer ${
                           state.visualBeamMode === mode
                             ? 'bg-amber-500/20 border-amber-400 text-amber-200'
                             : 'bg-slate-950 border-slate-800 text-slate-300 hover:bg-slate-900'
@@ -660,7 +791,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                         key={preset}
                         type="button"
                         onClick={() => onUpdateState({ cameraPreset: preset })}
-                        className={`min-h-[38px] px-2.5 py-1.5 rounded text-xs font-semibold border transition-colors cursor-pointer ${
+                        className={`min-h-[36px] px-2.5 py-1 rounded text-xs font-semibold border transition-colors cursor-pointer ${
                           state.cameraPreset === preset
                             ? 'bg-sky-500 text-slate-950 border-sky-400'
                             : 'bg-slate-950 text-slate-200 border-slate-800 hover:bg-slate-900'
@@ -672,7 +803,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                     <button
                       type="button"
                       onClick={() => onUpdateState({ cameraPreset: 'overview' })}
-                      className="min-h-[38px] px-2.5 py-1.5 rounded text-xs font-medium border border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+                      className="min-h-[36px] px-2.5 py-1 rounded text-xs font-medium border border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
                     >
                       Khôi phục góc nhìn
                     </button>
@@ -684,22 +815,22 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                   <button
                     type="button"
                     onClick={() => onUpdateState({ darkLabVisualMode: !state.darkLabVisualMode })}
-                    className={`w-full min-h-[36px] px-2.5 py-1 rounded text-xs font-semibold border transition-colors cursor-pointer ${
+                    className={`w-full min-h-[34px] px-2.5 py-1 rounded text-xs font-semibold border transition-colors cursor-pointer ${
                       state.darkLabVisualMode
                         ? 'bg-blue-950/80 border-blue-500/70 text-sky-200'
                         : 'bg-slate-950 border-slate-800 text-slate-300 hover:bg-slate-900'
                     }`}
                   >
                     {state.darkLabVisualMode
-                      ? 'Phòng tối + Spotlight xanh đêm: BẬT'
-                      : 'Phòng tối + Spotlight xanh đêm: TẮT'}
+                      ? 'Phòng tối + Hạt bụi Tyndall: BẬT'
+                      : 'Phòng tối + Hạt bụi Tyndall: TẮT'}
                   </button>
 
                   <div className="grid grid-cols-2 gap-1.5">
                     <button
                       type="button"
                       onClick={() => onUpdateState({ showLabels: !state.showLabels })}
-                      className={`min-h-[36px] px-2.5 py-1 rounded text-xs font-semibold border transition-colors flex items-center justify-center gap-1 cursor-pointer ${
+                      className={`min-h-[34px] px-2.5 py-1 rounded text-xs font-semibold border transition-colors flex items-center justify-center gap-1 cursor-pointer ${
                         state.showLabels
                           ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-200'
                           : 'bg-slate-950 border-slate-800 text-slate-400'
@@ -716,7 +847,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                           showChargeFlowConceptual: !state.showChargeFlowConceptual,
                         })
                       }
-                      className={`min-h-[36px] px-2.5 py-1 rounded text-xs font-semibold border transition-colors cursor-pointer ${
+                      className={`min-h-[34px] px-2.5 py-1 rounded text-xs font-semibold border transition-colors cursor-pointer ${
                         state.showChargeFlowConceptual
                           ? 'bg-sky-500/20 border-sky-500/50 text-sky-200'
                           : 'bg-slate-950 border-slate-800 text-slate-400'
@@ -743,7 +874,7 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                           key={q}
                           type="button"
                           onClick={() => onUpdateState({ qualityMode: q })}
-                          className={`min-h-[32px] px-1.5 py-1 rounded text-[11px] font-medium border transition-colors cursor-pointer ${
+                          className={`min-h-[30px] px-1.5 py-1 rounded text-[11px] font-medium border transition-colors cursor-pointer ${
                             state.qualityMode === q
                               ? 'bg-slate-200 text-slate-950 border-white'
                               : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-900'
@@ -760,7 +891,6 @@ export const ControlDock: React.FC<ControlDockProps> = ({
 
             {activeTab === 'status' && (
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                {/* Bảng thông số chuẩn hóa (Không gán đơn vị định lượng giả) */}
                 <div className="sm:col-span-6 bg-slate-900/90 border border-slate-800 rounded-lg p-3">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-semibold text-white">
@@ -811,7 +941,6 @@ export const ControlDock: React.FC<ControlDockProps> = ({
                   </div>
                 </div>
 
-                {/* Chuỗi nhân quả 4 bước */}
                 <div className="sm:col-span-6 bg-slate-900/90 border border-slate-800 rounded-lg p-3">
                   <div className="text-xs font-semibold text-white mb-1.5">
                     Chuỗi nhân quả Vật lí đang diễn ra:
